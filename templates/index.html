@@ -1,0 +1,182 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Medical RAG</title>
+<style>
+  :root {
+    --bg: #f3f6f5;
+    --panel: #ffffff;
+    --ink: #17252b;
+    --muted: #5d6f75;
+    --line: #d9e2e0;
+    --accent: #0d6e6e;
+    --accent-ink: #ffffff;
+    --user: #17252b;
+    --err: #a3361f;
+  }
+  * { box-sizing: border-box; }
+  html, body { height: 100%; margin: 0; }
+  body {
+    background: var(--bg);
+    color: var(--ink);
+    font-family: "Segoe UI", system-ui, -apple-system, Roboto, sans-serif;
+    font-size: 16px;
+    line-height: 1.55;
+    display: flex;
+    justify-content: center;
+  }
+  .app {
+    width: 100%;
+    max-width: 760px;
+    height: 100%;
+    display: flex;
+    flex-direction: column;
+    padding: 0 16px;
+  }
+  header { padding: 22px 0 14px; border-bottom: 1px solid var(--line); }
+  header h1 { margin: 0; font-size: 1.25rem; font-weight: 650; }
+  header p { margin: 4px 0 0; color: var(--muted); font-size: .9rem; }
+
+  #log { flex: 1; overflow-y: auto; padding: 20px 0; display: flex; flex-direction: column; gap: 16px; }
+  .empty { color: var(--muted); margin: auto; text-align: center; max-width: 420px; }
+  .empty button {
+    display: block; width: 100%; margin-top: 8px; text-align: left;
+    background: var(--panel); border: 1px solid var(--line); border-radius: 8px;
+    padding: 10px 12px; font: inherit; color: var(--ink); cursor: pointer;
+  }
+  .empty button:hover { border-color: var(--accent); }
+
+  .msg { max-width: 88%; padding: 11px 14px; border-radius: 12px; white-space: pre-wrap; word-wrap: break-word; }
+  .msg.user { align-self: flex-end; background: var(--user); color: #fff; border-bottom-right-radius: 3px; }
+  .msg.bot { align-self: flex-start; background: var(--panel); border: 1px solid var(--line); border-bottom-left-radius: 3px; }
+  .msg.err { border-color: var(--err); color: var(--err); }
+  .sources { margin-top: 10px; padding-top: 8px; border-top: 1px solid var(--line); font-size: .82rem; color: var(--muted); white-space: normal; }
+  .sources span { display: inline-block; margin: 2px 6px 2px 0; padding: 1px 8px; border: 1px solid var(--line); border-radius: 99px; }
+  .typing { color: var(--muted); }
+
+  form { display: flex; gap: 8px; padding: 14px 0 12px; border-top: 1px solid var(--line); }
+  textarea {
+    flex: 1; resize: none; font: inherit; padding: 10px 12px; max-height: 140px;
+    border: 1px solid var(--line); border-radius: 8px; background: var(--panel); color: var(--ink);
+  }
+  textarea:focus-visible, button:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+  form button {
+    background: var(--accent); color: var(--accent-ink); border: 0; border-radius: 8px;
+    padding: 0 20px; font: inherit; font-weight: 600; cursor: pointer;
+  }
+  form button:disabled { opacity: .5; cursor: not-allowed; }
+  .note { text-align: center; color: var(--muted); font-size: .75rem; padding-bottom: 12px; }
+</style>
+</head>
+<body>
+<div class="app">
+  <header>
+    <h1>Medical RAG</h1>
+    <p>Answers come only from the indexed medical encyclopedia.</p>
+  </header>
+
+  <div id="log">
+    <div class="empty" id="empty">
+      Ask a question about a condition, symptom, or term.
+      <button type="button" data-q="What is acne?">What is acne?</button>
+      <button type="button" data-q="What is aphasia?">What is aphasia?</button>
+      <button type="button" data-q="What causes anemia?">What causes anemia?</button>
+    </div>
+  </div>
+
+  <form id="form">
+    <textarea id="input" rows="1" placeholder="Type your question..." maxlength="1000" required></textarea>
+    <button id="send" type="submit">Ask</button>
+  </form>
+  <div class="note">For information only. Not a substitute for professional medical advice.</div>
+</div>
+
+<script>
+  const log = document.getElementById("log");
+  const form = document.getElementById("form");
+  const input = document.getElementById("input");
+  const send = document.getElementById("send");
+
+  function add(text, cls) {
+    const empty = document.getElementById("empty");
+    if (empty) empty.remove();
+    const div = document.createElement("div");
+    div.className = "msg " + cls;
+    div.textContent = text;
+    log.appendChild(div);
+    log.scrollTop = log.scrollHeight;
+    return div;
+  }
+
+  function addSources(el, sources) {
+    if (!sources || !sources.length) return;
+    const box = document.createElement("div");
+    box.className = "sources";
+    box.append("Sources: ");
+    sources.forEach(s => {
+      const tag = document.createElement("span");
+      tag.textContent = s.source + (s.page != null ? ", p. " + s.page : "");
+      box.appendChild(tag);
+    });
+    el.appendChild(box);
+  }
+
+  async function ask(question) {
+    add(question, "user");
+    const pending = add("Searching the source...", "bot typing");
+    send.disabled = true;
+    try {
+      const res = await fetch("/api/chat", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ message: question })
+      });
+      const data = await res.json();
+      pending.classList.remove("typing");
+      if (!res.ok) {
+        pending.classList.add("err");
+        pending.textContent = data.error || "Something went wrong.";
+      } else {
+        pending.textContent = data.answer;
+        addSources(pending, data.sources);
+      }
+    } catch (e) {
+      pending.classList.remove("typing");
+      pending.classList.add("err");
+      pending.textContent = "Could not reach the server. Is it running?";
+    } finally {
+      send.disabled = false;
+      input.focus();
+      log.scrollTop = log.scrollHeight;
+    }
+  }
+
+  form.addEventListener("submit", e => {
+    e.preventDefault();
+    const q = input.value.trim();
+    if (!q) return;
+    input.value = "";
+    input.style.height = "auto";
+    ask(q);
+  });
+
+  // Enter sends, Shift+Enter adds a newline
+  input.addEventListener("keydown", e => {
+    if (e.key === "Enter" && !e.shiftKey) {
+      e.preventDefault();
+      form.requestSubmit();
+    }
+  });
+  input.addEventListener("input", () => {
+    input.style.height = "auto";
+    input.style.height = Math.min(input.scrollHeight, 140) + "px";
+  });
+
+  document.querySelectorAll("[data-q]").forEach(b =>
+    b.addEventListener("click", () => ask(b.dataset.q))
+  );
+</script>
+</body>
+</html>
